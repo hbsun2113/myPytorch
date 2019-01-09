@@ -9,3 +9,5 @@
 data/*
 venv/*
 *data*
+logs/
+*log*
