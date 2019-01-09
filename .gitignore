@@ -1,0 +1,11 @@
+.svn
+.cvs
+.idea
+.DS_Store
+.git
+.hg
+*.hprof
+*.pyc
+data/*
+venv/*
+*data*
