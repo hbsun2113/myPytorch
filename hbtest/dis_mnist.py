@@ -25,6 +25,25 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
 
+class Parameter:
+    def __init__(self):
+        self.batch_size = 64
+        self.test_batch_size = 1000
+        self.epochs = 10
+        self.lr = 0.01
+        self.momentum = 0.5
+        self.no_cuda = False
+        self.seed = 1
+        self.log_interval = 10000
+        self.save_model = False
+        self.rank = -1
+        self.world_size = 5
+        self.backend = 'gloo'
+        self.no_cuda = False  # False代表使用cuda
+        self.use_cuda = not self.no_cuda and torch.cuda.is_available()
+        self.device = torch.device("cuda" if self.use_cuda else "cpu")
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -42,25 +61,6 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-
-class Parameter():
-    def __init__(self):
-        self.batch_size = 64
-        self.test_batch_size = 1000
-        self.epochs = 10
-        self.lr = 0.01
-        self.momentum = 0.5
-        self.no_cuda = False
-        self.seed = 1
-        self.log_interval = 10
-        self.save_model = False
-        self.rank = -1
-        self.world_size = 1
-        self.backend = 'gloo'
-        self.no_cuda = False
-        self.use_cuda = not self.no_cuda and torch.cuda.is_available()
-        self.device = torch.device("cuda" if self.use_cuda else "cpu")
 
     def __str__(self):
         return str(self.__class__) + ": " + str(self.__dict__)
@@ -92,9 +92,9 @@ class Trainer:
         self.train_loader = train_loader
         self.test_loader = test_loader
         self.optimizer = optimizer
-        print('len(train_loader.dataset)=', len(train_loader.dataset), ' len(test_loader.dataset)=',
-              len(test_loader.dataset))  # 总数量？
-        print('len(train_loader)=', len(train_loader), ' len(test_loader)=', len(test_loader))  # 总批次个数？
+        print ('init Trainer success')
+        # print('len(train_loader.dataset)=', len(train_loader.dataset), ' len(test_loader.dataset)=',len(test_loader.dataset))  # 总数量？
+        # print('len(train_loader)=', len(train_loader), ' len(test_loader)=', len(test_loader))  # 总批次个数？
 
     def adjust_learning_rate(self, epoch):  # 这是imagenet的策略，暂不用于mnist
         """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
@@ -116,7 +116,10 @@ class Trainer:
         # switch to train mode
         self.model.train()  # 设置状态为训练状态，应该是考虑到了dropout和BN。
 
-        train_sampler.set_epoch(epoch)
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        else:
+            print("Note that train_sampler is None ")
 
         # adjust_learning_rate(epoch)
 
@@ -126,15 +129,16 @@ class Trainer:
             # measure data loading time
             data_time.update(time.time() - end)
 
-            data, target = data.to(self.args.device, non_blocking=True), target.to(self.args.device,
-                                                                                   non_blocking=True)  # https://discuss.pytorch.org/t/pytorch-imagenet-github-example-training-input-variable-not-cuda/710 这行代码到底加不加呢？
+            # https://discuss.pytorch.org/t/pytorch-imagenet-github-example-training-input-variable-not-cuda/710
+            # data = data.to(self.args.device, non_blocking=True) # 如果该input跑在多个gpu上，则先不转换为cuda，由model去分发。
+            target = target.to(self.args.device, non_blocking=True)
 
             # compute output(include the loss)
             start_forward = time.time()
             output = self.model(data)
             loss = F.nll_loss(output, target)  # 这个是标量，为均值
             forward_time.update(time.time() - start_forward)  # 我暂时认为前向计算的时间包含计算loss
-            losses.update(loss.item(), target.size(0))
+            losses.update(loss.item())
 
             # zero the history of gradient
             self.optimizer.zero_grad()
@@ -153,16 +157,15 @@ class Trainer:
             batch_time.update(time.time() - end)
 
             # compute acc #这个是我需要知道的额外信息，应该是可以不被包含在batch的时间里的。
-            pred = 0
-            correct = 0
             with torch.no_grad():
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct = pred.eq(target.view_as(pred)).sum().item()
-                acces.update(correct, target.size(0))
+                correct = correct / self.args.batch_size
+                acces.update(correct)
 
-            if batch_id % self.args.log_interval == 0:
+            if batch_id % self.args.log_interval == 0 or batch_id == len(self.train_loader) - 1:
                 print('Train---Rank:{0} '  # 0
-                      'Epoch: [{1}] [{2}/{3}]\t'  # 1      
+                      'Epoch:[{1}] [{2}/{3}]\t'  # 1      
                       'Overprogress [{4}/{5}]\t'  # 2
                       'TrainBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
                       'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'  # 4
@@ -199,24 +202,25 @@ class Trainer:
                 # measure data loading time
                 data_time.update(time.time() - end)
 
-                data, target = data.to(self.args.device, non_blocking=True), target.to(self.args.device,
-                                                                                       non_blocking=True)  # https://discuss.pytorch.org/t/pytorch-imagenet-github-example-training-input-variable-not-cuda/710 这行代码到底加不加呢？
+                # data = data.to(self.args.device, non_blocking=True) #和train保持一致吧。
+                target = target.to(self.args.device, non_blocking=True)
 
                 output = self.model(data)
-                loss = F.nll_loss(output, target,
-                                  reduction='sum').item()  # sum up batch loss,default is mean  #https://pytorch.org/docs/stable/nn.html
-                losses.update(loss, target.size(0))
+                loss = F.nll_loss(output,
+                                  target).item()  # sum up batch loss,default is mean  #https://pytorch.org/docs/stable/nn.html
+                losses.update(loss)
                 pred = output.max(1, keepdim=True)[1]
                 correct = pred.eq(target.view_as(pred)).sum().item()
-                acces.update(correct, target.size(0))
+                correct = correct / self.args.test_batch_size
+                acces.update(correct)
 
                 batch_time.update(time.time() - end)
 
                 if batch_id % self.args.log_interval == 0 or batch_id == len(self.test_loader) - 1:
                     print('Test---Rank:{0} '  # 0
-                          'Epoch: [{1}] [{2}/{3}]\t'  # 1      
+                          'Epoch:[{1}] [{2}/{3}]\t'  # 1      
                           'Overprogress [{4}/{5}]\t'  # 2
-                          'TrainBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
+                          'TestBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
                           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'  # 4
                           'Acc {acc.val:.4f} ({acc.avg:.4f})\t'  # 5
                           'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(  # 6
@@ -233,43 +237,60 @@ class Trainer:
 
 def process(args):
     print("Go into process:")
+    print('device=', args.device)
+    debug=0
+    debug+=1 #1
+    print (debug)
+
     # define model
     model = Net()
-    #   model.cuda()
-    model = torch.nn.parallel.DistributedDataParallel(model)  # distributed tag
+    debug += 1  # 2
+    print(debug)
+    # cuda和DistributedDataParallel(model)是有先后顺序的。distribute后就不应该再更改model了
     if args.device != torch.device('cpu'):
-        print(args.device)
-        print("how to convert model?", type(model.cuda()))
-        model.cuda()  # 是不是这么写？不确定
+        model.cuda()
+    debug += 1  # 3
+    print(debug)
+    model = torch.nn.parallel.DistributedDataParallel(model)  # distributed tag
+    debug += 1  # 4
+    print(debug)
 
-    # define loss function (criterion) and optimizer
+    # 这个loss并没有用上。但是要注意，如果它用上了，则也需要转换为cuda，虽然不知道为什么。
     criterion = nn.CrossEntropyLoss()
     if args.device != torch.device('cpu'):
         criterion.cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum)
+    debug += 1  # 5
+    print(debug)
+    optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum)
 
     cudnn.benchmark = True  # 模型的输入维度不变的话，设置这个会使cudn加速
 
     kwargs = {'num_workers': args.world_size, 'pin_memory': True}  # if args.use_cuda else {}
+
     data_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
     train_dataset = datasets.MNIST('../data', train=True, download=True, transform=data_transform)
 
-    if args.world_size >= 1:  # 这个判断条件全面吗？
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)  # distributed tag
+    # distributed tag
+    if args.world_size > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     else:
         train_sampler = None
 
+    # batch_size是需要手动改变吗？
+    # 正常多线程情况下batch_size是需要改变的，因为每个节点的所有gpu和为batch_size。但是现在我们是以多线程仿真多节点，所以不改batch_size。
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=args.batch_size,
                                                shuffle=(train_sampler is None), sampler=train_sampler,
-                                               **kwargs)  # train_sampler里包含了shuffle了。 batch_size是需要手动改变吗？
+                                               **kwargs)  # train_sampler里包含了shuffle了。
 
-    test_dataset = datasets.MNIST('../data', train=False,
-                                  transform=data_transform)  # 想知道它和train的大小关系？？test和train的测试集应该是分开的。
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=True,
-                                              **kwargs)  # test有必要shuffle吗？ 另外，test也是在多台机器上吗？ 如何分布式test?
+    test_dataset = datasets.MNIST('../data', train=False, transform=data_transform)  # 加载非train目录的数据集
+
+    # test没有必要shuffle。 test不是分布式的，也就是说每个process都是拿同样的数据集测试，最终结果是一样的。
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False, **kwargs)
+
+    # print ('len(train_loader)=',len(train_loader),' test_dataset=',len(test_dataset))
+    # 分布式下，各个process拿到的数据在一个epoch内不重合。
 
     trainer = Trainer(args, model, train_loader, test_loader, optimizer)
 
@@ -278,11 +299,11 @@ def process(args):
         trainer.valid(epoch)
 
 
-def main_worker(index, args, flag):
+def main_worker(index, args, flag):  # 这个一定要注意，index是spawn给予的，这个bug当时调试了很久。
     args.rank = index
     os.environ['MASTER_ADDR'] = '127.0.0.1'
     os.environ['MASTER_PORT'] = '29502'
-    print(args.backend, args.rank, args.world_size)
+    print('distributed setting=', args.backend, args.rank, args.world_size)
     dist.init_process_group(backend=args.backend, rank=args.rank, world_size=args.world_size)
     process(args)
 
@@ -290,7 +311,7 @@ def main_worker(index, args, flag):
 def main():
     # Training settings
     args = Parameter()
-    print('args=', args)
+    print('original args=', print(args))
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -303,18 +324,6 @@ def main():
                       'from checkpoints.')
 
     mp.spawn(main_worker, nprocs=args.world_size, args=(args, 1))
-
-    return
-
-    processes = []
-    for rank in range(args.world_size):
-        args.rank = rank
-        p = Process(target=main_worker, args=(args, 1))
-        p.start()
-        processes.append(p)
-
-    for p in processes:
-        p.join()
 
 
 if __name__ == '__main__':

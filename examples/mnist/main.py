@@ -30,20 +30,23 @@ class Net(nn.Module):
 
 def train(args, model, device, train_loader, optimizer, epoch):
     model.train()  # 设置状态为训练状态，应该是考虑到了dropout和BN。
+    train_loss = 0
     for batch_id, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
+        train_loss += F.nll_loss(output, target, reduction='sum').item()
         optimizer.step()
         if batch_id % args.log_interval == 0:
-            print("hbsun", len(train_loader), len(train_loader.dataset))
+            # print("hbsun", len(train_loader), len(train_loader.dataset)) # 每个train_loader中有batch-size个数据
             print('Train Epoch:{} [{}/{} ({:.0f}%)]\tLoss:{:.6f}'.format(epoch, batch_id * len(data),
                                                                          len(train_loader.dataset),
                                                                          100. * batch_id / len(train_loader),
                                                                          loss.item()))
-
+    train_loss /= len(train_loader.dataset)
+    print('epoch=', epoch, ' train_loss=', train_loss)
 
 def test(args, model, device, test_loader):
     model.eval()
@@ -62,7 +65,7 @@ def test(args, model, device, test_loader):
         print('\nTest set: Average loss:{:.4f},Accuracy:{}/{} ({:.0f}%)\n'.format(test_loss, correct,
                                                                                   len(test_loader.dataset),
                                                                                   100. * correct / len(
-                                                                                      test_loader.dataset())))
+                                                                                      test_loader.dataset)))
 
 
 def main():

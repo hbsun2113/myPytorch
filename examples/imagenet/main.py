@@ -33,7 +33,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18', #这个�
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
 parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
-                    help='number of data loading workers (default: 4)')
+                    help='number of data loading workers (default: 4)')  # 一个节点应该使用多少个subprocess进行数据加载？
 parser.add_argument('--epochs', default=90, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
@@ -42,7 +42,7 @@ parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
-                         'using Data Parallel or Distributed Data Parallel')
+                         'using Data Parallel or Distributed Data Parallel')   # 每个节点的batch_size
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -108,10 +108,10 @@ def main():
         args.world_size = ngpus_per_node * args.world_size
         # Use torch.multiprocessing.spawn to launch distributed processes: the
         # main_worker process function
-        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
+        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args)) # 这样的情况下是每个process使用一个gpu
     else: #单线程
         # Simply call main_worker function
-        main_worker(args.gpu, ngpus_per_node, args)
+        main_worker(args.gpu, ngpus_per_node, args)  # 如果args.gpu为空，则该process使用所有gpu。否则也使用指定gpu。
 
 
 def main_worker(gpu, ngpus_per_node, args):
@@ -142,16 +142,16 @@ def main_worker(gpu, ngpus_per_node, args):
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.
-        if args.gpu is not None:
+        if args.gpu is not None: # Multi-Process Single-GPU 每个subprocess一个gpu
             torch.cuda.set_device(args.gpu)
             model.cuda(args.gpu)
             # When using a single GPU per process and per
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
-            args.batch_size = int(args.batch_size / ngpus_per_node)
-            args.workers = int(args.workers / ngpus_per_node) # 这个指的是共有多少node。
+            args.batch_size = int(args.batch_size / ngpus_per_node) # 因为指定了gpu id，所以也要指定batch_size。
+            args.workers = int(args.workers / ngpus_per_node) # 这个指的是每个子进程应该有多少个数据加载的subprocess
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        else:
+        else: # Single-Process Multi-GPU。一个subprocess拥有多个gpu。不必指定batch_size，因为会自动按照gpu个数进行划分。
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
             # available GPUs if device_ids are not set
@@ -159,13 +159,13 @@ def main_worker(gpu, ngpus_per_node, args):
     elif args.gpu is not None: # 如果不是分布式，但指定了gpu,也要使用该gpu。
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
-    else: # 不是分布式 奇怪，既不是单机多卡也不是多机，为什么还是数据并行？？？？
+    else: # 只有一个节点，并且该节点上只有一个process，但是该process有多卡。因此也可以数据并行。
         # DataParallel will divide and allocate batch_size to all available GPUs
         if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
             model.features = torch.nn.DataParallel(model.features)
             model.cuda()
         else:
-            model = torch.nn.DataParallel(model).cuda()
+            model = torch.nn.DataParallel(model).cuda() # single-node multi-GPU data parallel training
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
