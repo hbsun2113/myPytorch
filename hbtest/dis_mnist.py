@@ -5,7 +5,7 @@
 
 from __future__ import print_function
 import torch.nn.functional as F
-
+import argparse
 # imagenet
 import os
 import random
@@ -29,7 +29,7 @@ class Parameter:
     def __init__(self):
         self.batch_size = 64
         self.test_batch_size = 1000
-        self.epochs = 10
+        self.epochs = 2
         self.lr = 0.01
         self.momentum = 0.5
         self.no_cuda = False
@@ -37,7 +37,7 @@ class Parameter:
         self.log_interval = 10000
         self.save_model = False
         self.rank = -1
-        self.world_size = 5
+        self.world_size = 2
         self.backend = 'gloo'
         self.no_cuda = False  # False代表使用cuda
         self.use_cuda = not self.no_cuda and torch.cuda.is_available()
@@ -92,7 +92,8 @@ class Trainer:
         self.train_loader = train_loader
         self.test_loader = test_loader
         self.optimizer = optimizer
-        print ('init Trainer success')
+        print('init Trainer success')
+
         # print('len(train_loader.dataset)=', len(train_loader.dataset), ' len(test_loader.dataset)=',len(test_loader.dataset))  # 总数量？
         # print('len(train_loader)=', len(train_loader), ' len(test_loader)=', len(test_loader))  # 总批次个数？
 
@@ -112,6 +113,8 @@ class Trainer:
 
         losses = AverageMeter()
         acces = AverageMeter()
+        top1 = AverageMeter()
+        top5 = AverageMeter()
 
         # switch to train mode
         self.model.train()  # 设置状态为训练状态，应该是考虑到了dropout和BN。
@@ -156,12 +159,18 @@ class Trainer:
             # measure elapsed time
             batch_time.update(time.time() - end)
 
-            # compute acc #这个是我需要知道的额外信息，应该是可以不被包含在batch的时间里的。
+            # if self.args.batch_size != data.size(0):
+            #     print('self.args.batch_size=', self.args.batch_size, ' data.size(0)=', data.size(0))
+
+            # compute acc #这个是我需要知道的额外信息，应该是可以不被包含在batch的时间里。
             with torch.no_grad():
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct = pred.eq(target.view_as(pred)).sum().item()
-                correct = correct / self.args.batch_size
+                correct = correct / data.size(0)  # 这个不可以用self.args.batch_size，是因为可能不准
                 acces.update(correct)
+                acc1, acc5 = self.accuracy(output, target, topk=(1, 5))
+                top1.update(acc1[0], data.size(0))
+                top5.update(acc5[0], data.size(0))
 
             if batch_id % self.args.log_interval == 0 or batch_id == len(self.train_loader) - 1:
                 print('Train---Rank:{0} '  # 0
@@ -173,7 +182,9 @@ class Trainer:
                       'Backward {backward_time.val:.3f} ({backward_time.avg:.3f})\t'  # 6
                       'Update {update_time.val:.3f} ({update_time.avg:.3f})\t'  # 7
                       'Acc {acc.val:.4f} ({acc.avg:.4f})\t'  # 8
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(  # 9
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(  # 9
                     dist.get_rank(),  # 0
                     epoch, batch_id, len(self.train_loader),  # 1
                     batch_id * len(data), len(self.train_loader.dataset),  # 2
@@ -183,7 +194,9 @@ class Trainer:
                     backward_time=backward_time,  # 6
                     update_time=update_time,  # 7
                     acc=acces,  # 8
-                    loss=losses))  # 9
+                    loss=losses,
+                    top1=top1,
+                    top5=top5))  # 9
 
             end = time.time()
 
@@ -192,6 +205,8 @@ class Trainer:
         data_time = AverageMeter()  # 加载数据的时间
         losses = AverageMeter()
         acces = AverageMeter()
+        top1 = AverageMeter()
+        top5 = AverageMeter()
 
         # switch to evaluate mode
         self.model.eval()
@@ -211,8 +226,11 @@ class Trainer:
                 losses.update(loss)
                 pred = output.max(1, keepdim=True)[1]
                 correct = pred.eq(target.view_as(pred)).sum().item()
-                correct = correct / self.args.test_batch_size
+                correct = correct / data.size(0)
                 acces.update(correct)
+                acc1, acc5 = self.accuracy(output, target, topk=(1, 5))
+                top1.update(acc1[0], data.size(0))
+                top5.update(acc5[0], data.size(0))
 
                 batch_time.update(time.time() - end)
 
@@ -223,24 +241,44 @@ class Trainer:
                           'TestBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
                           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'  # 4
                           'Acc {acc.val:.4f} ({acc.avg:.4f})\t'  # 5
-                          'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(  # 6
+                          'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                          'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                          'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(  # 6
                         dist.get_rank(),  # 0
                         epoch, batch_id, len(self.test_loader),  # 1
                         batch_id * len(data), len(self.test_loader.dataset),  # 2
                         batch_time=batch_time,  # 3
                         data_time=data_time,  # 4
                         acc=acces,  # 5
-                        loss=losses))  # 6
+                        loss=losses,
+                        top1=top1,
+                        top5=top5))  # 6
 
                 end = time.time()
+
+    def accuracy(self, output, target, topk=(1,)):
+        """Computes the accuracy over the k top predictions for the specified values of k"""
+        with torch.no_grad():
+            maxk = max(topk)
+            batch_size = target.size(0)
+
+            _, pred = output.topk(maxk, 1, True, True)
+            pred = pred.t()
+            correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+            res = []
+            for k in topk:
+                correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+                res.append(correct_k.mul_(100.0 / batch_size))
+            return res
 
 
 def process(args):
     print("Go into process:")
     print('device=', args.device)
-    debug=0
-    debug+=1 #1
-    print (debug)
+    debug = 0
+    debug += 1  # 1
+    print(debug)
 
     # define model
     model = Net()
@@ -287,7 +325,7 @@ def process(args):
     test_dataset = datasets.MNIST('../data', train=False, transform=data_transform)  # 加载非train目录的数据集
 
     # test没有必要shuffle。 test不是分布式的，也就是说每个process都是拿同样的数据集测试，最终结果是一样的。
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=False, **kwargs)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=True, **kwargs)
 
     # print ('len(train_loader)=',len(train_loader),' test_dataset=',len(test_dataset))
     # 分布式下，各个process拿到的数据在一个epoch内不重合。
@@ -326,5 +364,33 @@ def main():
     mp.spawn(main_worker, nprocs=args.world_size, args=(args, 1))
 
 
+def cmd_main():
+    parser = argparse.ArgumentParser(description="Pytorch MNIST Example")
+    parser.add_argument('--world-size', default=-1, type=int, help='number of nodes for distributed training')
+    parser.add_argument('--rank', default=-1, type=int, help='node rank for distributed training')
+    cmd_args = parser.parse_args()
+    print('world-size=', cmd_args.world_size, ' rank=', cmd_args.rank)
+
+    # Training settings
+    args = Parameter()
+    print('original args=', print(args))
+
+    if args.seed is not None:
+        random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        cudnn.deterministic = True
+        warnings.warn('You have chosen to seed training. '  # 不理解，为什么会降低速度；为什么会有不确定行为？
+                      'This will turn on the CUDNN deterministic setting, '
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints.')
+
+    # mp.spawn(main_worker, nprocs=args.world_size, args=(args, 1))
+
+    args.world_size = cmd_args.world_size
+    main_worker(cmd_args.rank, args, 1)
+
+
 if __name__ == '__main__':
     main()
+    # cmd_main()
