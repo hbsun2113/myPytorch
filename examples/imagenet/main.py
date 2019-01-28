@@ -114,9 +114,9 @@ def main():
         main_worker(args.gpu, ngpus_per_node, args)  # 如果args.gpu为空，则该process使用所有gpu。否则也使用指定gpu。
 
 
-def main_worker(gpu, ngpus_per_node, args):
+def main_worker(gpu, ngpus_per_node, args):  # 只有单线程情况下参数gpu才可能为空，否则多线程中gpu就是线程id
     global best_acc1
-    args.gpu = gpu  #这个是id，不是数量
+    args.gpu = gpu  # 这个是id，不是数量
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -138,7 +138,7 @@ def main_worker(gpu, ngpus_per_node, args):
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
 
-    if args.distributed: # 分布式情况下，要分清楚：是使用所有GPU还是指定GPU。
+    if args.distributed:  # 分布式情况下，要分清楚：是使用所有GPU还是指定GPU。
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
         # DistributedDataParallel will use all available devices.
@@ -149,14 +149,14 @@ def main_worker(gpu, ngpus_per_node, args):
             # DistributedDataParallel, we need to divide the batch size
             # ourselves based on the total number of GPUs we have
             args.batch_size = int(args.batch_size / ngpus_per_node) # 因为指定了gpu id，所以也要指定batch_size。
-            args.workers = int(args.workers / ngpus_per_node) # 这个指的是每个子进程应该有多少个数据加载的subprocess
+            args.workers = int(args.workers / ngpus_per_node) # 这个指的是每个子进程应该有多少个数据加载的subprocess,之前是以节点为单位设置的
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         else: # Single-Process Multi-GPU。一个subprocess拥有多个gpu。不必指定batch_size，因为会自动按照gpu个数进行划分。
             model.cuda()
             # DistributedDataParallel will divide and allocate batch_size to all
             # available GPUs if device_ids are not set
             model = torch.nn.parallel.DistributedDataParallel(model)
-    elif args.gpu is not None: # 如果不是分布式，但指定了gpu,也要使用该gpu。
+    elif args.gpu is not None:  # 如果不是分布式，但指定了gpu,也要使用该gpu。
         torch.cuda.set_device(args.gpu)
         model = model.cuda(args.gpu)
     else: # 只有一个节点，并且该节点上只有一个process，但是该process有多卡。因此也可以数据并行。

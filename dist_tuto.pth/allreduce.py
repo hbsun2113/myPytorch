@@ -13,7 +13,7 @@ def allreduce(send, recv):
     recv_buff = th.zeros(send.size())
     accum = th.zeros(send.size())
     accum[:] = send[:]
-    #th.cuda.synchronize()
+    # th.cuda.synchronize()
 
     left = ((rank - 1) + size) % size
     right = (rank + 1) % size
@@ -30,7 +30,7 @@ def allreduce(send, recv):
             dist.recv(send_buff, left)
             accum[:] += send[:]
         send_req.wait()
-    #th.cuda.synchronize()
+    # th.cuda.synchronize()
     recv[:] = accum[:]
 
 
@@ -42,11 +42,12 @@ def run(rank, size):
     for _ in range(4):
         c = t.clone()
         dist.all_reduce(c, dist.reduce_op.SUM)
-#        allreduce(t, c)
+        # allreduce(t, c)
         t.set_(c)
     print(t)
 
-def init_processes(rank, size, fn, backend='mpi'):
+
+def init_processes(rank, size, fn, backend='gloo'):
     """ Initialize the distributed environment. """
     os.environ['MASTER_ADDR'] = '127.0.0.1'
     os.environ['MASTER_PORT'] = '29500'

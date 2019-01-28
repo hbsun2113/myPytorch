@@ -159,14 +159,11 @@ class Trainer:
             # measure elapsed time
             batch_time.update(time.time() - end)
 
-            # if self.args.batch_size != data.size(0):
-            #     print('self.args.batch_size=', self.args.batch_size, ' data.size(0)=', data.size(0))
-
             # compute acc #这个是我需要知道的额外信息，应该是可以不被包含在batch的时间里。
             with torch.no_grad():
                 pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct = pred.eq(target.view_as(pred)).sum().item()
-                correct = correct / data.size(0)  # 这个不可以用self.args.batch_size，是因为可能不准
+                correct = correct / data.size(0)  # 这个不可以用self.args.batch_size，是因为可能不准。最后一个batch可能比较小。
                 acces.update(correct)
                 acc1, acc5 = self.accuracy(output, target, topk=(1, 5))
                 top1.update(acc1[0], data.size(0))
@@ -175,7 +172,7 @@ class Trainer:
             if batch_id % self.args.log_interval == 0 or batch_id == len(self.train_loader) - 1:
                 print('Train---Rank:{0} '  # 0
                       'Epoch:[{1}] [{2}/{3}]\t'  # 1      
-                      'Overprogress [{4}/{5}]\t'  # 2
+                      'Progress: [{4}/{5}]\t'  # 2
                       'TrainBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
                       'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'  # 4
                       'Forward {forward_time.val:.3f} ({forward_time.avg:.3f})\t'  # 5
@@ -221,8 +218,7 @@ class Trainer:
                 target = target.to(self.args.device, non_blocking=True)
 
                 output = self.model(data)
-                loss = F.nll_loss(output,
-                                  target).item()  # sum up batch loss,default is mean  #https://pytorch.org/docs/stable/nn.html
+                loss = F.nll_loss(output, target).item()  # sum up batch loss,default is mean  # https://pytorch.org/docs/stable/nn.html
                 losses.update(loss)
                 pred = output.max(1, keepdim=True)[1]
                 correct = pred.eq(target.view_as(pred)).sum().item()
@@ -237,7 +233,7 @@ class Trainer:
                 if batch_id % self.args.log_interval == 0 or batch_id == len(self.test_loader) - 1:
                     print('Test---Rank:{0} '  # 0
                           'Epoch:[{1}] [{2}/{3}]\t'  # 1      
-                          'Overprogress [{4}/{5}]\t'  # 2
+                          'Progress: [{4}/{5}]\t'  # 2
                           'TestBatchTime {batch_time.val:.3f} ({batch_time.avg:.3f})\t'  # 3
                           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'  # 4
                           'Acc {acc.val:.4f} ({acc.avg:.4f})\t'  # 5
@@ -256,7 +252,7 @@ class Trainer:
 
                 end = time.time()
 
-    def accuracy(self, output, target, topk=(1,)):
+    def accuracy(self, output, target, topk=(1,)): # 这个是从imagenet上扒下来的，但也已经证实了我手写的acc是正确的。
         """Computes the accuracy over the k top predictions for the specified values of k"""
         with torch.no_grad():
             maxk = max(topk)
@@ -355,11 +351,11 @@ def main():
         random.seed(args.seed)
         torch.manual_seed(args.seed)
         cudnn.deterministic = True
-        warnings.warn('You have chosen to seed training. '  # 不理解，为什么会降低速度；为什么会有不确定行为？
-                      'This will turn on the CUDNN deterministic setting, '
-                      'which can slow down your training considerably! '
-                      'You may see unexpected behavior when restarting '
-                      'from checkpoints.')
+        # warnings.warn('You have chosen to seed training. '  # 不理解，为什么会降低速度；为什么会有不确定行为？
+        #               'This will turn on the CUDNN deterministic setting, '
+        #               'which can slow down your training considerably! '
+        #               'You may see unexpected behavior when restarting '
+        #               'from checkpoints.')
 
     mp.spawn(main_worker, nprocs=args.world_size, args=(args, 1))
 
@@ -392,5 +388,5 @@ def cmd_main():
 
 
 if __name__ == '__main__':
-    main()
-    # cmd_main()
+    # main()
+    cmd_main()
