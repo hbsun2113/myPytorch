@@ -34,15 +34,13 @@ import torchvision.models as models
 
 
 
-def run(args,flag):
-    print ('something')
+a=10
 
 def main():
 
-    args=[1,3,3]
-    mp.spawn(run, nprocs=torch.cuda.device_count(), args=(args, 1))
-
-    return
+    print('why')
+    a = 8
+    print(a)
 
 
 if __name__ == '__main__':

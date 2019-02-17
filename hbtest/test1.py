@@ -34,7 +34,7 @@ import torchvision.models as models
 
 
 
-def run(args,flag):
+def run(index,args,flag):
     print ('something')
 
 def main():
