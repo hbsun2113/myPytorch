@@ -39,7 +39,7 @@ nx.draw(g_dgl.to_networkx(), with_labels=True)
 # They are the same graph, except that :class:`DGLGraph` is *always* directional.
 #
 # One can also create a graph by calling DGL's own interface.
-# 
+#
 # Now let's build a star graph. :class:`DGLGraph` nodes are consecutive range of
 # integers between 0 and :func:`number_of_nodes() <DGLGraph.number_of_nodes>`
 # and can grow by calling :func:`add_nodes <DGLGraph.add_nodes>`.
