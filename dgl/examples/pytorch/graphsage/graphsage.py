@@ -16,9 +16,10 @@ import random
 
 
 class Aggregator(nn.Module):
-    def __init__(self, g, in_feats, out_feats, activation=None, bias=True):
+    def __init__(self, g, in_feats, out_feats, dropout, activation=None, bias=True):
         super(Aggregator, self).__init__()
         self.g = g
+        self.dropout = nn.Dropout(p=dropout)
         self.linear = nn.Linear(in_feats, out_feats, bias=bias)  # (F, EF) or (2F, EF)
         self.activation = activation
         nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
@@ -28,14 +29,14 @@ class Aggregator(nn.Module):
         h = node.data['h']  # (B, F)
         # print('debug--', nei.requires_grad, h.requires_grad)
         h = self.concat(h, nei, node)  # (B, F) or (B, 2F)
+        h = self.dropout(h)
         h = self.linear(h)   # (B, EF)
         if self.activation:
             h = self.activation(h)
         with torch.no_grad():
             norm = torch.norm(h, dim=1, keepdim=True)
             norm[torch.isinf(norm)] = 0
-        h = h / norm
-        # print('debug--norm', h.shape, norm, norm_new)
+        # h = h * norm
         return {'h': h}  # 自动返回到node的field里了
 
     @abc.abstractmethod
@@ -44,30 +45,22 @@ class Aggregator(nn.Module):
 
 
 class MeanAggregator(Aggregator):
-    def __init__(self, g, in_feats, out_feats, activation, bias):
-        super(MeanAggregator, self).__init__(g, in_feats, out_feats, activation, bias)
+    def __init__(self, g, in_feats, out_feats, dropout, activation, bias):
+        super(MeanAggregator, self).__init__(g, in_feats, out_feats, dropout, activation, bias)
 
     def concat(self, h, nei, nodes):
         degs = self.g.in_degrees(nodes.nodes()).float()
         if h.is_cuda:
             degs = degs.cuda(h.device)
-        # print('debug--degs.shape', degs.shape)
-        # aggregator.reshape(h.shape[0], -1, h.shape[1])
-        # print('debug--aggregator.shape', aggregator.shape)
-        # print('debug--h.shape', h.unsqueeze(1).shape)
         concatenate = torch.cat((nei, h.unsqueeze(1)), 1)
-        # print('debug--concatenate.shape', concatenate.shape)
-        # summ = torch.sum(concatenate, 1)
-        # print('debug--summ.shape', summ.shape)
         concatenate = torch.sum(concatenate, 1) / degs.unsqueeze(1)
         return concatenate  # (B, F)
 
 
 class PoolingAggregator(Aggregator):
-    def __init__(self, g, in_feats, out_feats, activation, bias):  # (2F, F)
-        super(PoolingAggregator, self).__init__(g, in_feats*2, out_feats, activation, bias)
-        self.mlp = PoolingAggregator.MLP(in_feats, in_feats, F.relu, False, True)
-        print('aggregator.type=pooling')
+    def __init__(self, g, in_feats, out_feats, dropout, activation, bias):  # (2F, F)
+        super(PoolingAggregator, self).__init__(g, in_feats*2, out_feats, dropout, activation, bias)
+        self.mlp = PoolingAggregator.MLP(in_feats, in_feats, dropout=0.5, activation=F.relu, bias=True)
 
     def concat(self, h, nei, nodes):
         nei = self.mlp(nei)  # (B, F)
@@ -75,7 +68,7 @@ class PoolingAggregator(Aggregator):
         return concatenate
 
     class MLP(nn.Module):
-        def __init__(self, in_feats, out_feats, activation, dropout, bias):  # (F, F)
+        def __init__(self, in_feats, out_feats, dropout, activation, bias=True):  # (F, F)
             super(PoolingAggregator.MLP, self).__init__()
             self.linear = nn.Linear(in_feats, out_feats, bias=bias)  # (F, F)
             self.dropout = nn.Dropout(p=dropout)
@@ -105,10 +98,9 @@ class GraphSAGELayer(nn.Module):
         self.g = g
         self.dropout = nn.Dropout(p=dropout)
         if aggregator_type == "pooling":
-            self.aggregator = PoolingAggregator(g, in_feats, out_feats, activation, bias)
+            self.aggregator = PoolingAggregator(g, in_feats, out_feats, dropout=0, activation=activation, bias=bias)
         else:
-            self.aggregator = MeanAggregator(g, in_feats, out_feats, activation, bias)
-        print('GraphSAGELayer.shape=', (in_feats, out_feats))
+            self.aggregator = MeanAggregator(g, in_feats, out_feats, dropout=0, activation=activation, bias=bias)
 
     def forward(self, h):
         h = self.dropout(h)
@@ -131,15 +123,14 @@ class GraphSAGE(nn.Module):
         super(GraphSAGE, self).__init__()
         self.layers = nn.ModuleList()
 
-        # hbsun:注意这个模型分为三个层次：分别是输入层、隐藏层(可能有多层)、输出层。注意哦
-
         # input layer
         self.layers.append(GraphSAGELayer(g, in_feats, n_hidden, activation, dropout, aggregator_type))
         # hidden layers
         for i in range(n_layers - 1):
             self.layers.append(GraphSAGELayer(g, n_hidden, n_hidden, activation, dropout, aggregator_type))
         # output layer
-        self.layers.append(GraphSAGELayer(g, n_hidden, n_classes, None, dropout, aggregator_type))
+        # self.layers.append(GraphSAGELayer(g, n_hidden, n_classes, None, dropout, aggregator_type))
+        self.layers.append(PoolingAggregator.MLP(n_hidden, n_classes, dropout, None, bias=True))
 
     def forward(self, features):
         h = features
