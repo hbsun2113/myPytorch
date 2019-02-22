@@ -388,5 +388,5 @@ def cmd_main():
 
 
 if __name__ == '__main__':
-    # main()
-    cmd_main()
+    main()
+    # cmd_main()
