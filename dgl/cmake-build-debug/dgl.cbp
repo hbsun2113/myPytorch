@@ -141,9 +141,6 @@
 		<Unit filename="C:/Users/v-haosun/PycharmProjects/myPytorch/dgl/src/graph/graph_op.cc">
 			<Option target="dgl"/>
 		</Unit>
-		<Unit filename="C:/Users/v-haosun/PycharmProjects/myPytorch/dgl/src/graph/hbsunTest.cpp">
-			<Option target="dgl"/>
-		</Unit>
 		<Unit filename="C:/Users/v-haosun/PycharmProjects/myPytorch/dgl/src/graph/immutable_graph.cc">
 			<Option target="dgl"/>
 		</Unit>

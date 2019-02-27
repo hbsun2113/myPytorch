@@ -19,7 +19,6 @@ file(REMOVE_RECURSE
   "CMakeFiles/dgl.dir/src/runtime/thread_pool.cc.obj"
   "CMakeFiles/dgl.dir/src/runtime/threading_backend.cc.obj"
   "CMakeFiles/dgl.dir/src/runtime/workspace_pool.cc.obj"
-  "CMakeFiles/dgl.dir/src/graph/hbsunTest.cpp.obj"
   "libdgl.pdb"
   "libdgl.dll"
   "libdgl.dll.a"

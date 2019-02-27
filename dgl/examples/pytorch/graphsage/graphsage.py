@@ -130,7 +130,7 @@ class GraphSAGE(nn.Module):
             self.layers.append(GraphSAGELayer(g, n_hidden, n_hidden, activation, dropout, aggregator_type))
         # output layer
         # self.layers.append(GraphSAGELayer(g, n_hidden, n_classes, None, dropout, aggregator_type))
-        self.layers.append(PoolingAggregator.MLP(n_hidden, n_classes, dropout, None, bias=True))
+        self.layers.append(nn.Linear(n_hidden, n_classes, bias=True))
 
     def forward(self, features):
         h = features
@@ -217,8 +217,8 @@ def main(args):
         if epoch >= 3:
             t0 = time.time()
         # forward
-        logits = model(features)
-        loss = loss_fcn(logits[train_mask], labels[train_mask])
+        logits = model(features)  # 一次过了所有节点，无论是训练集还是测试集
+        loss = loss_fcn(logits[train_mask], labels[train_mask])  # 但是只更新训练集节点
 
         optimizer.zero_grad()
         loss.backward()

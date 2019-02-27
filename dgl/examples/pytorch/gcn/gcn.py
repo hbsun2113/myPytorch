@@ -11,10 +11,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
+import copy
 
 
 def gcn_msg(edge):
     msg = edge.src['h'] * edge.src['norm']
+    # print('debug', edge, edge.src['h'].shape)  # 13264=10556+2708
+    # print('debug', edge.edges()[0])
     return {'m': msg}
 
 
@@ -77,6 +80,7 @@ class GCNLayer(nn.Module):
         h = self.g.ndata.pop('h')
         return h
 
+
 class GCN(nn.Module):
     def __init__(self,
                  g,
@@ -102,6 +106,7 @@ class GCN(nn.Module):
             h = layer(h)
         return h
 
+
 def evaluate(model, features, labels, mask):
     model.eval()
     with torch.no_grad():
@@ -112,11 +117,12 @@ def evaluate(model, features, labels, mask):
         correct = torch.sum(indices == labels)
         return correct.item() * 1.0 / len(labels)
 
+
 def main(args):
     # load and preprocess dataset
     data = load_data(args)
     features = torch.FloatTensor(data.features)
-    labels = torch.LongTensor(data.labels)
+    labels = torch.LongTensor(data.labels)  # 2708个节点
     train_mask = torch.ByteTensor(data.train_mask)
     val_mask = torch.ByteTensor(data.val_mask)
     test_mask = torch.ByteTensor(data.test_mask)
@@ -130,9 +136,9 @@ def main(args):
       #Val samples %d
       #Test samples %d""" %
           (n_edges, n_classes,
-              train_mask.sum().item(),
-              val_mask.sum().item(),
-              test_mask.sum().item()))
+           train_mask.sum().item(),
+           val_mask.sum().item(),
+           test_mask.sum().item()))
 
     if args.gpu < 0:
         cuda = False
@@ -150,6 +156,38 @@ def main(args):
     n_edges = g.number_of_edges()
     # add self loop
     g.add_edges(g.nodes(), g.nodes())
+
+    src = g.edges()[0]
+    des = g.edges()[1]
+    edge_dict1 = {}
+    for e in range(0, src.shape[0]):
+        edge_dict1.setdefault(src[e].item(), set()).add(des[e].item())
+    # print(len(edge_dict1[1344]), edge_dict1[1344])
+
+    edge_dict2 = copy.deepcopy(edge_dict1)
+    for e in range(0, src.shape[0]):
+        edge_dict2[src[e].item()].update(edge_dict1[des[e].item()])
+    # print(len(edge_dict2[1344]), edge_dict2[1344])
+
+    for key in edge_dict2.keys():
+        edge_dict2[key].difference_update(edge_dict1[key])
+        edge_dict2[key].add(key)
+    # print(len(edge_dict2[1344]), edge_dict2[1344])
+
+    g2 = DGLGraph(data.graph)
+    g2.clear()
+    g2.add_nodes(g.number_of_nodes())
+    for key in edge_dict2.keys():
+        src = key
+        des_set = edge_dict2[key]
+        for des in des_set:
+            g2.add_edge(src, des)
+
+    print('debug', g2.number_of_edges())
+
+
+    # print('debug', src.shape[0])
+    return
     # normalization
     degs = g.in_degrees().float()
     norm = torch.pow(degs, -0.5)
@@ -195,8 +233,8 @@ def main(args):
 
         acc = evaluate(model, features, labels, val_mask)
         print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
-              "ETputs(KTEPS) {:.2f}". format(epoch, np.mean(dur), loss.item(),
-                                             acc, n_edges / np.mean(dur) / 1000))
+              "ETputs(KTEPS) {:.2f}".format(epoch, np.mean(dur), loss.item(),
+                                            acc, n_edges / np.mean(dur) / 1000))
 
     print()
     acc = evaluate(model, features, labels, test_mask)
@@ -207,19 +245,19 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCN')
     register_data_args(parser)
     parser.add_argument("--dropout", type=float, default=0.5,
-            help="dropout probability")
+                        help="dropout probability")
     parser.add_argument("--gpu", type=int, default=-1,
-            help="gpu")
+                        help="gpu")
     parser.add_argument("--lr", type=float, default=1e-2,
-            help="learning rate")
+                        help="learning rate")
     parser.add_argument("--n-epochs", type=int, default=200,
-            help="number of training epochs")
+                        help="number of training epochs")
     parser.add_argument("--n-hidden", type=int, default=16,
-            help="number of hidden gcn units")
+                        help="number of hidden gcn units")
     parser.add_argument("--n-layers", type=int, default=1,
-            help="number of hidden gcn layers")
+                        help="number of hidden gcn layers")
     parser.add_argument("--weight-decay", type=float, default=5e-4,
-            help="Weight for L2 loss")
+                        help="Weight for L2 loss")
     args = parser.parse_args()
     print(args)
 

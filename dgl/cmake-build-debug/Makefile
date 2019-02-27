@@ -276,33 +276,6 @@ src/graph/graph_op.cc.s:
 	$(MAKE) -f CMakeFiles\dgl.dir\build.make CMakeFiles/dgl.dir/src/graph/graph_op.cc.s
 .PHONY : src/graph/graph_op.cc.s
 
-src/graph/hbsunTest.obj: src/graph/hbsunTest.cpp.obj
-
-.PHONY : src/graph/hbsunTest.obj
-
-# target to build an object file
-src/graph/hbsunTest.cpp.obj:
-	$(MAKE) -f CMakeFiles\dgl.dir\build.make CMakeFiles/dgl.dir/src/graph/hbsunTest.cpp.obj
-.PHONY : src/graph/hbsunTest.cpp.obj
-
-src/graph/hbsunTest.i: src/graph/hbsunTest.cpp.i
-
-.PHONY : src/graph/hbsunTest.i
-
-# target to preprocess a source file
-src/graph/hbsunTest.cpp.i:
-	$(MAKE) -f CMakeFiles\dgl.dir\build.make CMakeFiles/dgl.dir/src/graph/hbsunTest.cpp.i
-.PHONY : src/graph/hbsunTest.cpp.i
-
-src/graph/hbsunTest.s: src/graph/hbsunTest.cpp.s
-
-.PHONY : src/graph/hbsunTest.s
-
-# target to generate assembly for a file
-src/graph/hbsunTest.cpp.s:
-	$(MAKE) -f CMakeFiles\dgl.dir\build.make CMakeFiles/dgl.dir/src/graph/hbsunTest.cpp.s
-.PHONY : src/graph/hbsunTest.cpp.s
-
 src/graph/immutable_graph.obj: src/graph/immutable_graph.cc.obj
 
 .PHONY : src/graph/immutable_graph.obj
@@ -760,9 +733,6 @@ help:
 	@echo ... src/graph/graph_op.obj
 	@echo ... src/graph/graph_op.i
 	@echo ... src/graph/graph_op.s
-	@echo ... src/graph/hbsunTest.obj
-	@echo ... src/graph/hbsunTest.i
-	@echo ... src/graph/hbsunTest.s
 	@echo ... src/graph/immutable_graph.obj
 	@echo ... src/graph/immutable_graph.i
 	@echo ... src/graph/immutable_graph.s
