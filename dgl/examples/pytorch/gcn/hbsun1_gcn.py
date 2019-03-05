@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 import copy
+import random
 
 
 def gcn_msg(edge):
@@ -26,64 +27,61 @@ def gcn_reduce(node):
     return {'h': accum}
 
 
-class NodeApplyModule(nn.Module):
-    def __init__(self, out_feats, activation=None, bias=True):
-        super(NodeApplyModule, self).__init__()
-        if bias:
-            self.bias = nn.Parameter(torch.Tensor(out_feats))
-        else:
-            self.bias = None
-        self.activation = activation
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        if self.bias is not None:
-            stdv = 1. / math.sqrt(self.bias.size(0))
-            self.bias.data.uniform_(-stdv, stdv)
-
-    def forward(self, nodes):
-        h = nodes.data['h']
-        if self.bias is not None:
-            h = h + self.bias
-        if self.activation:
-            h = self.activation(h)
-        return {'h': h}
-
-
 class GCNLayer(nn.Module):
     def __init__(self,
-                 g,
+                 g1,
+                 g2,
                  in_feats,
                  out_feats,
                  activation,
                  dropout,
                  bias=True):
         super(GCNLayer, self).__init__()
-        self.g = g
-        self.weight = nn.Parameter(torch.Tensor(in_feats, out_feats))
-        if dropout:
-            self.dropout = nn.Dropout(p=dropout)
-        else:
-            self.dropout = 0.
-        self.node_update = NodeApplyModule(out_feats, activation, bias)
-        self.reset_parameters()
+        self.g1 = g1
+        self.g2 = g2
+        self.dropout = nn.Dropout(p=dropout)
+        self.linear = nn.Linear(in_feats, out_feats, bias=bias)
+        self.activation = activation
+        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
+        # self.reset_parameters()
 
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.weight.size(1))
         self.weight.data.uniform_(-stdv, stdv)
+        if self.bias is not None:
+            bias_stdv = 1. / math.sqrt(self.bias.size(0))
+            self.bias.data.uniform_(-bias_stdv, bias_stdv)
+
+    def forward1(self, h):
+        h = self.dropout(h)
+
+        self.g1.ndata['h'] = self.linear(h)
+        # h = torch.mm(h, self.weight)
+        # if self.bias is not None:
+        #     h = h + self.bias
+        # self.g.ndata['h'] = h
+
+        self.g1.update_all(gcn_msg, gcn_reduce)
+        h = self.g1.ndata.pop('h')
+        if self.activation:
+            h = self.activation(h)
+        return h
 
     def forward(self, h):
-        if self.dropout:
-            h = self.dropout(h)
-        self.g.ndata['h'] = torch.mm(h, self.weight)
-        self.g.update_all(gcn_msg, gcn_reduce, self.node_update)
-        h = self.g.ndata.pop('h')
+        h = self.dropout(h)
+        self.g1.ndata['h'] = h
+        self.g1.update_all(gcn_msg, gcn_reduce)
+        h = self.g1.ndata.pop('h')
+        h = self.linear(h)
+        if self.activation:
+            h = self.activation(h)
         return h
 
 
 class GCN(nn.Module):
     def __init__(self,
-                 g,
+                 g1,
+                 g2,
                  in_feats,
                  n_hidden,
                  n_classes,
@@ -93,12 +91,12 @@ class GCN(nn.Module):
         super(GCN, self).__init__()
         self.layers = nn.ModuleList()
         # input layer
-        self.layers.append(GCNLayer(g, in_feats, n_hidden, activation, dropout))
+        self.layers.append(GCNLayer(g1, g2, in_feats, n_hidden, activation, dropout))
         # hidden layers
         for i in range(n_layers - 1):
-            self.layers.append(GCNLayer(g, n_hidden, n_hidden, activation, dropout))
+            self.layers.append(GCNLayer(g1, g2, n_hidden, n_hidden, activation, dropout))
         # output layer
-        self.layers.append(GCNLayer(g, n_hidden, n_classes, None, dropout))
+        self.layers.append(GCNLayer(g1, g2, n_hidden, n_classes, None, dropout))
 
     def forward(self, features):
         h = features
@@ -119,6 +117,10 @@ def evaluate(model, features, labels, mask):
 
 
 def main(args):
+    random.seed(args.syn_seed)
+    np.random.seed(args.syn_seed)
+    torch.manual_seed(args.syn_seed)
+
     # load and preprocess dataset
     data = load_data(args)
     features = torch.FloatTensor(data.features)
@@ -150,23 +152,34 @@ def main(args):
         train_mask = train_mask.cuda()
         val_mask = val_mask.cuda()
         test_mask = test_mask.cuda()
+        torch.cuda.manual_seed_all(args.syn_seed)
 
     # graph preprocess and calculate normalization factor
-    g = DGLGraph(data.graph)
-    n_edges = g.number_of_edges()
+    g1 = DGLGraph(data.graph)
+    n_edges = g1.number_of_edges()
     # add self loop
-    g.add_edges(g.nodes(), g.nodes())
+    g1.add_edges(g1.nodes(), g1.nodes())
+    # normalization
+    degs1 = g1.in_degrees().float()
+    norm1 = torch.pow(degs1, -0.5)
+    norm1[torch.isinf(norm1)] = 0
+    if cuda:
+        norm1 = norm1.cuda()
+    g1.ndata['norm'] = norm1.unsqueeze(1)
 
-    src = g.edges()[0]
-    des = g.edges()[1]
+    src = g1.edges()[0]
+    des = g1.edges()[1]
     edge_dict1 = {}
     for e in range(0, src.shape[0]):
         edge_dict1.setdefault(src[e].item(), set()).add(des[e].item())
     # print(len(edge_dict1[1344]), edge_dict1[1344])
 
-    edge_dict2 = copy.deepcopy(edge_dict1)
+    # edge_dict2 = copy.deepcopy(edge_dict1)
+    # for e in range(0, src.shape[0]):
+    #     edge_dict2[src[e].item()].update(edge_dict1[des[e].item()])
+    edge_dict2 = {}
     for e in range(0, src.shape[0]):
-        edge_dict2[src[e].item()].update(edge_dict1[des[e].item()])
+        edge_dict2.setdefault(src[e].item(), set()).update(edge_dict1[des[e].item()])
     # print(len(edge_dict2[1344]), edge_dict2[1344])
 
     for key in edge_dict2.keys():
@@ -176,28 +189,21 @@ def main(args):
 
     g2 = DGLGraph(data.graph)
     g2.clear()
-    g2.add_nodes(g.number_of_nodes())
-    for key in edge_dict2.keys():
-        src = key
-        des_set = edge_dict2[key]
-        for des in des_set:
-            g2.add_edge(src, des)
-
-    print('debug', g2.number_of_edges())
-
-
-    # print('debug', src.shape[0])
-    return
-    # normalization
-    degs = g.in_degrees().float()
-    norm = torch.pow(degs, -0.5)
-    norm[torch.isinf(norm)] = 0
-    if cuda:
-        norm = norm.cuda()
-    g.ndata['norm'] = norm.unsqueeze(1)
+    # g2.add_nodes(g1.number_of_nodes())
+    # for key in edge_dict2.keys():
+    #     src = key
+    #     des_set = edge_dict2[key]
+    #     for des in des_set:
+    #         g2.add_edge(src, des)
+    # degs2 = g2.in_degrees().float()
+    # norm2 = torch.pow(degs2, -0.5)
+    # norm2[torch.isinf(norm2)] = 0
+    # if cuda:
+    #     norm2 = norm2.cuda()
+    # g2.ndata['norm'] = norm2.unsqueeze(1)
 
     # create GCN model
-    model = GCN(g,
+    model = GCN(g1, g2,
                 in_feats,
                 args.n_hidden,
                 n_classes,
