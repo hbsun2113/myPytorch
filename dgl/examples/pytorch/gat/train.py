@@ -44,7 +44,7 @@ class GraphAttention(nn.Module):
             self.attn_drop = nn.Dropout(attn_drop)
         else:
             self.attn_drop = None
-        self.attn_l = nn.Parameter(torch.Tensor(size=(num_heads, out_dim, 1)))
+        self.attn_l = nn.Parameter(torch.Tensor(size=(num_heads, out_dim, 1)))  # HxD'x1
         self.attn_r = nn.Parameter(torch.Tensor(size=(num_heads, out_dim, 1)))
         nn.init.xavier_normal_(self.fc.weight.data, gain=1.414)
         nn.init.xavier_normal_(self.attn_l.data, gain=1.414)

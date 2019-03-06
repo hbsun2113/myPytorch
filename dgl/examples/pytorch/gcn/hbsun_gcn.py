@@ -13,6 +13,16 @@ from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 import copy
 import random
+import matplotlib.pyplot as plt
+
+
+def draw(acc, loss):
+    plt.figure()
+    x = range(0, len(acc))
+    plt.plot(x, acc, label='acc')
+    plt.plot(x, loss, label='loss')
+    plt.legend()
+    plt.savefig("hbsun_gcn.png")
 
 
 def gcn_msg(edge):
@@ -103,7 +113,12 @@ class GCNLayer(nn.Module):
         self.g2.update_all(gcn_msg, gcn_reduce)
         h1 = self.g1.ndata.pop('h')
         h2 = self.g2.ndata.pop('h')
+        # if self.activation:
+        #     h1 = self.activation(h1)
+        # if self.activation:
+        #     h2 = self.activation(h2)
         h = torch.cat((h1, h2), dim=1)
+        h = self.dropout(h)
         h = self.fc(h)
         if self.activation:
             h = self.activation(h)
@@ -257,6 +272,8 @@ def main(args):
 
     # initialize graph
     dur = []
+    train_loss = []
+    val_acc = []
     for epoch in range(args.n_epochs):
         model.train()
         if epoch >= 3:
@@ -271,15 +288,18 @@ def main(args):
 
         if epoch >= 3:
             dur.append(time.time() - t0)
-
+        train_loss.append(loss.item())
         acc = evaluate(model, features, labels, val_mask)
+        val_acc.append(acc)
         print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
-              "ETputs(KTEPS) {:.2f}".format(epoch, np.mean(dur), loss.item(),
-                                            acc, n_edges / np.mean(dur) / 1000))
-
+              "ETputs(KTEPS) {:.2f}". format(epoch, np.mean(dur), loss.item(),
+                                             acc, n_edges / np.mean(dur) / 1000))
+    draw(val_acc, train_loss)
     print()
     acc = evaluate(model, features, labels, test_mask)
-    print("Test Accuracy {:.4f}".format(acc))
+    # print("Test Accuracy {:.4f}".format(acc))
+    print("Train Loss {:.4f} | Val Acc {:.4f} | Test Acc {:.4f}".format(np.mean(train_loss), np.mean(val_acc), acc))
+
 
 
 if __name__ == '__main__':

@@ -13,6 +13,32 @@ import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 import random
+import matplotlib.pyplot as plt
+
+
+def draw(acc, loss):
+    plt.figure()
+    x = range(0, len(acc))
+    plt.plot(x, acc, label='acc')
+    plt.plot(x, loss, label='loss')
+    plt.legend()
+    plt.savefig("gcn_mp_nn.png")
+
+
+def draw1():
+    x = np.linspace(0, 2 * np.pi, 100)
+    y1, y2 = np.sin(x), np.cos(x)
+
+    plt.plot(x, y1)
+    plt.plot(x, y2)
+
+    plt.title('line chart')
+    plt.xlabel('x')
+    plt.ylabel('y')
+
+    # plt.show()
+    plt.savefig("test")
+    exit()
 
 
 def gcn_msg(edge):
@@ -45,6 +71,13 @@ class GCNLayer(nn.Module):
         self.activation = activation
         nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
         # self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.weight.size(1))
+        self.weight.data.uniform_(-stdv, stdv)
+        if self.bias is not None:
+            bias_stdv = 1. / math.sqrt(self.bias.size(0))
+            self.bias.data.uniform_(-bias_stdv, bias_stdv)
 
     def reset_parameters(self):
         stdv = 1. / math.sqrt(self.weight.size(1))
@@ -175,6 +208,8 @@ def main(args):
 
     # initialize graph
     dur = []
+    train_loss = []
+    val_acc = []
     for epoch in range(args.n_epochs):
         model.train()
         if epoch >= 3:
@@ -189,15 +224,17 @@ def main(args):
 
         if epoch >= 3:
             dur.append(time.time() - t0)
-
+        train_loss.append(loss.item())
         acc = evaluate(model, features, labels, val_mask)
+        val_acc.append(acc)
         print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
               "ETputs(KTEPS) {:.2f}". format(epoch, np.mean(dur), loss.item(),
                                              acc, n_edges / np.mean(dur) / 1000))
-
+    draw(val_acc, train_loss)
     print()
     acc = evaluate(model, features, labels, test_mask)
-    print("Test Accuracy {:.4f}".format(acc))
+    # print("Test Accuracy {:.4f}".format(acc))
+    print("Train Loss {:.4f} | Val Acc {:.4f} | Test Acc {:.4f}".format(np.mean(train_loss), np.mean(val_acc), acc))
 
 
 if __name__ == '__main__':
@@ -219,7 +256,6 @@ if __name__ == '__main__':
             help="Weight for L2 loss")
     args = parser.parse_args()
     print(args)
-
     main(args)
 
 #xavier_uniform_

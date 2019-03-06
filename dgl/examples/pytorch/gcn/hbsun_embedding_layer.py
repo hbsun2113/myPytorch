@@ -22,7 +22,7 @@ def draw(acc, loss):
     plt.plot(x, acc, label='acc')
     plt.plot(x, loss, label='loss')
     plt.legend()
-    plt.savefig("hbsun1_gcn.png")
+    plt.savefig("hbsun_embedding_layer.png")
 
 
 def gcn_msg(edge):
@@ -37,11 +37,52 @@ def gcn_reduce(node):
     return {'h': accum}
 
 
+class MLP(nn.Module):
+    def __init__(self, in_feats, out_feats, dropout, activation, bias=True):  # (F, F)
+        super(MLP, self).__init__()
+        self.linear = nn.Linear(in_feats, out_feats, bias=bias)  # (F, F)
+        self.dropout = nn.Dropout(p=dropout)
+        self.activation = activation
+        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
+
+    def forward(self, nei):
+        nei = self.dropout(nei)  # (B, N, F)
+        nei = self.linear(nei)
+        if self.activation:
+            nei = self.activation(nei)
+        return nei
+
+
+class NodeApplyModule(nn.Module):
+    def __init__(self, out_feats, activation=None, bias=True):
+        super(NodeApplyModule, self).__init__()
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(out_feats))
+        else:
+            self.bias = None
+        self.activation = activation
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if self.bias is not None:
+            stdv = 1. / math.sqrt(self.bias.size(0))
+            self.bias.data.uniform_(-stdv, stdv)
+
+    def forward(self, nodes):
+        h = nodes.data['h']
+        if self.bias is not None:
+            h = h + self.bias
+        if self.activation:
+            h = self.activation(h)
+        return {'h': h}
+
+
 class GCNLayer(nn.Module):
     def __init__(self,
                  g1,
                  g2,
                  in_feats,
+                 hid_feats,
                  out_feats,
                  activation,
                  dropout,
@@ -50,9 +91,13 @@ class GCNLayer(nn.Module):
         self.g1 = g1
         self.g2 = g2
         self.dropout = nn.Dropout(p=dropout)
-        self.linear = nn.Linear(in_feats, out_feats, bias=bias)
+        self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.fc = nn.Linear(2 * hid_feats, out_feats, bias=bias)
         self.activation = activation
-        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.linear1.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.linear2.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.fc.weight, gain=nn.init.calculate_gain('relu'))
         # self.reset_parameters()
 
     def reset_parameters(self):
@@ -63,28 +108,20 @@ class GCNLayer(nn.Module):
             self.bias.data.uniform_(-bias_stdv, bias_stdv)
 
     def forward(self, h):
-        h = self.dropout(h)
-
-        self.g1.ndata['h'] = self.linear(h)
-        # h = torch.mm(h, self.weight)
-        # if self.bias is not None:
-        #     h = h + self.bias
-        # self.g.ndata['h'] = h
-
+        h1 = self.dropout(h)
+        h2 = self.dropout(h)
+        # self_h = h
+        self.g1.ndata['h'] = self.linear1(h1)
+        self.g2.ndata['h'] = self.linear2(h2)
         self.g1.update_all(gcn_msg, gcn_reduce)
-        h = self.g1.ndata.pop('h')
-        if self.activation:
-            h = self.activation(h)
-        return h
-
-    def forward1(self, h):
+        self.g2.update_all(gcn_msg, gcn_reduce)
+        h1 = self.g1.ndata.pop('h')
+        h1 = self.activation(h1)
+        h2 = self.g2.ndata.pop('h')
+        h2 = self.activation(h2)
+        h = torch.cat((h1, h2), dim=1)
         h = self.dropout(h)
-        self.g1.ndata['h'] = h
-        self.g1.update_all(gcn_msg, gcn_reduce)
-        h = self.g1.ndata.pop('h')
-        h = self.linear(h)
-        if self.activation:
-            h = self.activation(h)
+        h = self.fc(h)
         return h
 
 
@@ -100,13 +137,7 @@ class GCN(nn.Module):
                  dropout):
         super(GCN, self).__init__()
         self.layers = nn.ModuleList()
-        # input layer
-        self.layers.append(GCNLayer(g1, g2, in_feats, n_hidden, activation, dropout))
-        # hidden layers
-        for i in range(n_layers - 1):
-            self.layers.append(GCNLayer(g1, g2, n_hidden, n_hidden, activation, dropout))
-        # output layer
-        self.layers.append(GCNLayer(g1, g2, n_hidden, n_classes, None, dropout))
+        self.layers.append(GCNLayer(g1, g2, in_feats, n_hidden, n_classes, activation, dropout))
 
     def forward(self, features):
         h = features
@@ -176,6 +207,7 @@ def main(args):
     if cuda:
         norm1 = norm1.cuda()
     g1.ndata['norm'] = norm1.unsqueeze(1)
+    print('g1.number_of_edges=', g1.number_of_edges())
 
     src = g1.edges()[0]
     des = g1.edges()[1]
@@ -194,23 +226,24 @@ def main(args):
 
     for key in edge_dict2.keys():
         edge_dict2[key].difference_update(edge_dict1[key])
-        edge_dict2[key].add(key)
+        # edge_dict2[key].add(key)
     # print(len(edge_dict2[1344]), edge_dict2[1344])
 
     g2 = DGLGraph(data.graph)
     g2.clear()
-    # g2.add_nodes(g1.number_of_nodes())
-    # for key in edge_dict2.keys():
-    #     src = key
-    #     des_set = edge_dict2[key]
-    #     for des in des_set:
-    #         g2.add_edge(src, des)
-    # degs2 = g2.in_degrees().float()
-    # norm2 = torch.pow(degs2, -0.5)
-    # norm2[torch.isinf(norm2)] = 0
-    # if cuda:
-    #     norm2 = norm2.cuda()
-    # g2.ndata['norm'] = norm2.unsqueeze(1)
+    g2.add_nodes(g1.number_of_nodes())
+    for key in edge_dict2.keys():
+        src = key
+        des_set = edge_dict2[key]
+        for des in des_set:
+            g2.add_edge(src, des)
+    degs2 = g2.in_degrees().float()
+    norm2 = torch.pow(degs2, -0.5)
+    norm2[torch.isinf(norm2)] = 0
+    if cuda:
+        norm2 = norm2.cuda()
+    g2.ndata['norm'] = norm2.unsqueeze(1)
+    print('g2.number_of_edges=', g2.number_of_edges())
 
     # create GCN model
     model = GCN(g1, g2,
@@ -261,7 +294,6 @@ def main(args):
     print("Train Loss {:.4f} | Val Acc {:.4f} | Test Acc {:.4f}".format(np.mean(train_loss), np.mean(val_acc), acc))
 
 
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCN')
     register_data_args(parser)
@@ -273,7 +305,7 @@ if __name__ == '__main__':
                         help="learning rate")
     parser.add_argument("--n-epochs", type=int, default=200,
                         help="number of training epochs")
-    parser.add_argument("--n-hidden", type=int, default=16,
+    parser.add_argument("--n-hidden", type=int, default=8,
                         help="number of hidden gcn units")
     parser.add_argument("--n-layers", type=int, default=1,
                         help="number of hidden gcn layers")
@@ -283,3 +315,5 @@ if __name__ == '__main__':
     print(args)
 
     main(args)
+
+
