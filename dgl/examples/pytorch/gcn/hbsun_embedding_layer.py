@@ -91,19 +91,20 @@ class GCNLayer(nn.Module):
         self.g1 = g1
         self.g2 = g2
         self.dropout = nn.Dropout(p=dropout)
-        self.linear = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.num_heads = 8
+        self.linear = nn.Linear(in_feats, self.num_heads * hid_feats, bias=bias)
         self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
         self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
         self.fc = nn.Linear(hid_feats, out_feats, bias=bias)
-        self.al = nn.Linear(hid_feats, 1)
-        self.ar = nn.Linear(hid_feats, 1)
+        self.al = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
+        self.ar = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
         self.activation = activation
         nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.linear1.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.linear2.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.fc.weight, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_normal_(self.al.weight, gain=1.414)
-        nn.init.xavier_normal_(self.ar.weight, gain=1.414)
+        nn.init.xavier_normal_(self.al.data, gain=1.414)
+        nn.init.xavier_normal_(self.ar.data, gain=1.414)
         self.leaky_relu = nn.LeakyReLU(0.2)
         # self.reset_parameters()
 
@@ -121,23 +122,28 @@ class GCNLayer(nn.Module):
         self.g2.ndata['h'] = h
         self.g1.update_all(gcn_msg, gcn_reduce)
         self.g2.update_all(gcn_msg, gcn_reduce)
-        h1 = self.g1.ndata.pop('h')
+        h1 = self.g1.ndata.pop('h')  # (H,N,D)
         h2 = self.g2.ndata.pop('h')
-        ai = self.al(h)
-        aj1 = self.ar(h1)
-        aj2 = self.ar(h2)
+        h1 = h1.reshape((self.num_heads, h1.shape[0], -1))
+        h2 = h2.reshape((self.num_heads, h2.shape[0], -1))
+        h = h.reshape((self.num_heads, h.shape[0], -1))
+        # print('h.shape=', h1.shape, 'al.shape=', self.al.shape, 'self.num_heads=', self.num_heads)
+        ai = torch.bmm(h, self.al)  # (H,N,1)
+        aj1 = torch.bmm(h1, self.ar)
+        aj2 = torch.bmm(h2, self.ar)
         a1 = self.leaky_relu(ai + aj1)
         a1 = torch.exp(a1).clamp(-10, 10)
         a2 = self.leaky_relu(ai + aj2)
         a2 = torch.exp(a2).clamp(-10, 10)
-        alpha1 = a1/(a1+a2)
-        alpha2 = a2/(a1+a2)
-        h = alpha1*h1+alpha2*h2
-
+        alpha1 = a1 / (a1 + a2)  # (H,N,1)
+        alpha2 = a2 / (a1 + a2)  # (H,N,1)
+        h = alpha1 * h1 + alpha2 * h2
+        # print('h1.shape=\n', h[0], '\n', h[1])  # (H,N,1)
+        # exit()
+        h = torch.sum(h, dim=0) / self.num_heads
+        # print('h2.shape=', h.shape)  # (N, 1)
         h = self.fc(h)
         return h
-
-
 
     # def forward1(self, h):
     #     h1 = self.dropout(h)
