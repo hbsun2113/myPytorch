@@ -91,13 +91,20 @@ class GCNLayer(nn.Module):
         self.g1 = g1
         self.g2 = g2
         self.dropout = nn.Dropout(p=dropout)
+        self.linear = nn.Linear(in_feats, hid_feats, bias=bias)
         self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
         self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
-        self.fc = nn.Linear(2 * hid_feats, out_feats, bias=bias)
+        self.fc = nn.Linear(hid_feats, out_feats, bias=bias)
+        self.al = nn.Linear(hid_feats, 1)
+        self.ar = nn.Linear(hid_feats, 1)
         self.activation = activation
+        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.linear1.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.linear2.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.fc.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_normal_(self.al.weight, gain=1.414)
+        nn.init.xavier_normal_(self.ar.weight, gain=1.414)
+        self.leaky_relu = nn.LeakyReLU(0.2)
         # self.reset_parameters()
 
     def reset_parameters(self):
@@ -108,21 +115,46 @@ class GCNLayer(nn.Module):
             self.bias.data.uniform_(-bias_stdv, bias_stdv)
 
     def forward(self, h):
-        h1 = self.dropout(h)
-        h2 = self.dropout(h)
-        # self_h = h
-        self.g1.ndata['h'] = self.linear1(h1)
-        self.g2.ndata['h'] = self.linear2(h2)
+        h = self.dropout(h)
+        h = self.linear(h)
+        self.g1.ndata['h'] = h
+        self.g2.ndata['h'] = h
         self.g1.update_all(gcn_msg, gcn_reduce)
         self.g2.update_all(gcn_msg, gcn_reduce)
         h1 = self.g1.ndata.pop('h')
-        h1 = self.activation(h1)
         h2 = self.g2.ndata.pop('h')
-        h2 = self.activation(h2)
-        h = torch.cat((h1, h2), dim=1)
-        h = self.dropout(h)
+        ai = self.al(h)
+        aj1 = self.ar(h1)
+        aj2 = self.ar(h2)
+        a1 = self.leaky_relu(ai + aj1)
+        a1 = torch.exp(a1).clamp(-10, 10)
+        a2 = self.leaky_relu(ai + aj2)
+        a2 = torch.exp(a2).clamp(-10, 10)
+        alpha1 = a1/(a1+a2)
+        alpha2 = a2/(a1+a2)
+        h = alpha1*h1+alpha2*h2
+
         h = self.fc(h)
         return h
+
+
+
+    # def forward1(self, h):
+    #     h1 = self.dropout(h)
+    #     h2 = self.dropout(h)
+    #     # self_h = h
+    #     self.g1.ndata['h'] = self.linear1(h1)
+    #     self.g2.ndata['h'] = self.linear2(h2)
+    #     self.g1.update_all(gcn_msg, gcn_reduce)
+    #     self.g2.update_all(gcn_msg, gcn_reduce)
+    #     h1 = self.g1.ndata.pop('h')
+    #     h1 = self.activation(h1)
+    #     h2 = self.g2.ndata.pop('h')
+    #     h2 = self.activation(h2)
+    #     h = torch.cat((h1, h2), dim=1)
+    #     h = self.dropout(h)
+    #     h = self.fc(h)
+    #     return h
 
 
 class GCN(nn.Module):
@@ -285,8 +317,8 @@ def main(args):
         acc = evaluate(model, features, labels, val_mask)
         val_acc.append(acc)
         print("Epoch {:05d} | Time(s) {:.4f} | Loss {:.4f} | Accuracy {:.4f} | "
-              "ETputs(KTEPS) {:.2f}". format(epoch, np.mean(dur), loss.item(),
-                                             acc, n_edges / np.mean(dur) / 1000))
+              "ETputs(KTEPS) {:.2f}".format(epoch, np.mean(dur), loss.item(),
+                                            acc, n_edges / np.mean(dur) / 1000))
     draw(val_acc, train_loss)
     print()
     acc = evaluate(model, features, labels, test_mask)
@@ -305,7 +337,7 @@ if __name__ == '__main__':
                         help="learning rate")
     parser.add_argument("--n-epochs", type=int, default=200,
                         help="number of training epochs")
-    parser.add_argument("--n-hidden", type=int, default=8,
+    parser.add_argument("--n-hidden", type=int, default=16,
                         help="number of hidden gcn units")
     parser.add_argument("--n-layers", type=int, default=1,
                         help="number of hidden gcn layers")
@@ -315,5 +347,3 @@ if __name__ == '__main__':
     print(args)
 
     main(args)
-
-
