@@ -21,6 +21,18 @@ import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
 import dgl.function as fn
+import random
+import matplotlib.pyplot as plt
+
+
+def draw(acc, loss):
+    plt.figure()
+    x = range(0, len(acc))
+    plt.plot(x, acc, label='acc')
+    plt.plot(x, loss, label='loss')
+    plt.legend()
+    name = "gat.png"
+    plt.savefig(name)
 
 class GraphAttention(nn.Module):
     def __init__(self,
@@ -150,6 +162,10 @@ def evaluate(model, features, labels, mask):
         return accuracy(logits, labels)
 
 def main(args):
+    random.seed(args.syn_seed)
+    np.random.seed(args.syn_seed)
+    torch.manual_seed(args.syn_seed)
+
     # load and preprocess dataset
     data = load_data(args)
     features = torch.FloatTensor(data.features)
@@ -181,6 +197,7 @@ def main(args):
         train_mask = train_mask.cuda()
         val_mask = val_mask.cuda()
         test_mask = test_mask.cuda()
+        torch.cuda.manual_seed_all(args.syn_seed)
 
     # create DGL graph
     g = DGLGraph(data.graph)

@@ -22,7 +22,8 @@ def draw(acc, loss):
     plt.plot(x, acc, label='acc')
     plt.plot(x, loss, label='loss')
     plt.legend()
-    plt.savefig("hbsun_embedding_layer.png")
+    name = "hbsun_embedding_layer.png"
+    plt.savefig(name)
 
 
 def gcn_msg(edge):
@@ -95,7 +96,7 @@ class GCNLayer(nn.Module):
         self.linear = nn.Linear(in_feats, self.num_heads * hid_feats, bias=bias)
         self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
         self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
-        self.fc = nn.Linear(hid_feats, out_feats, bias=bias)
+        self.fc = nn.Linear(self.num_heads * hid_feats, out_feats, bias=bias)
         self.al = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
         self.ar = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
         self.activation = activation
@@ -137,30 +138,29 @@ class GCNLayer(nn.Module):
         a2 = torch.exp(a2).clamp(-10, 10)
         alpha1 = a1 / (a1 + a2)  # (H,N,1)
         alpha2 = a2 / (a1 + a2)  # (H,N,1)
-        h = alpha1 * h1 + alpha2 * h2
-        # print('h1.shape=\n', h[0], '\n', h[1])  # (H,N,1)
-        # exit()
-        h = torch.sum(h, dim=0) / self.num_heads
+        h = alpha1 * h1 + alpha2 * h2  # (H,N,D)
+        h = h.reshape((h.shape[1], -1))
+        # h = torch.sum(h, dim=0) / self.num_heads
         # print('h2.shape=', h.shape)  # (N, 1)
         h = self.fc(h)
         return h
 
-    # def forward1(self, h):
-    #     h1 = self.dropout(h)
-    #     h2 = self.dropout(h)
-    #     # self_h = h
-    #     self.g1.ndata['h'] = self.linear1(h1)
-    #     self.g2.ndata['h'] = self.linear2(h2)
-    #     self.g1.update_all(gcn_msg, gcn_reduce)
-    #     self.g2.update_all(gcn_msg, gcn_reduce)
-    #     h1 = self.g1.ndata.pop('h')
-    #     h1 = self.activation(h1)
-    #     h2 = self.g2.ndata.pop('h')
-    #     h2 = self.activation(h2)
-    #     h = torch.cat((h1, h2), dim=1)
-    #     h = self.dropout(h)
-    #     h = self.fc(h)
-    #     return h
+    def forward1(self, h):
+        h1 = self.dropout(h)
+        h2 = self.dropout(h)
+        # self_h = h
+        self.g1.ndata['h'] = self.linear1(h1)
+        self.g2.ndata['h'] = self.linear2(h2)
+        self.g1.update_all(gcn_msg, gcn_reduce)
+        self.g2.update_all(gcn_msg, gcn_reduce)
+        h1 = self.g1.ndata.pop('h')
+        h1 = self.activation(h1)
+        h2 = self.g2.ndata.pop('h')
+        h2 = self.activation(h2)
+        h = torch.cat((h1, h2), dim=1)
+        h = self.dropout(h)
+        h = self.fc(h)
+        return h
 
 
 class GCN(nn.Module):
