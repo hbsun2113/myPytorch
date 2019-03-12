@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dgl import DGLGraph
 from dgl.data import register_data_args, load_data
+import copy
 import random
 import matplotlib.pyplot as plt
 
@@ -21,8 +22,7 @@ def draw(acc, loss):
     plt.plot(x, acc, label='acc')
     plt.plot(x, loss, label='loss')
     plt.legend()
-    name = "hbsun_embedding_layer.png"
-    plt.savefig(name)
+    plt.savefig("hbsun_1attention_layer.png")
 
 
 def gcn_msg(edge):
@@ -35,6 +35,46 @@ def gcn_msg(edge):
 def gcn_reduce(node):
     accum = torch.sum(node.mailbox['m'], 1) * node.data['norm']
     return {'h': accum}
+
+
+class MLP(nn.Module):
+    def __init__(self, in_feats, out_feats, dropout, activation, bias=True):  # (F, F)
+        super(MLP, self).__init__()
+        self.linear = nn.Linear(in_feats, out_feats, bias=bias)  # (F, F)
+        self.dropout = nn.Dropout(p=dropout)
+        self.activation = activation
+        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
+
+    def forward(self, nei):
+        nei = self.dropout(nei)  # (B, N, F)
+        nei = self.linear(nei)
+        if self.activation:
+            nei = self.activation(nei)
+        return nei
+
+
+class NodeApplyModule(nn.Module):
+    def __init__(self, out_feats, activation=None, bias=True):
+        super(NodeApplyModule, self).__init__()
+        if bias:
+            self.bias = nn.Parameter(torch.Tensor(out_feats))
+        else:
+            self.bias = None
+        self.activation = activation
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if self.bias is not None:
+            stdv = 1. / math.sqrt(self.bias.size(0))
+            self.bias.data.uniform_(-stdv, stdv)
+
+    def forward(self, nodes):
+        h = nodes.data['h']
+        if self.bias is not None:
+            h = h + self.bias
+        if self.activation:
+            h = self.activation(h)
+        return {'h': h}
 
 
 class GCNLayer(nn.Module):
@@ -51,33 +91,28 @@ class GCNLayer(nn.Module):
         self.g1 = g1
         self.g2 = g2
         self.dropout = nn.Dropout(p=dropout)
-        self.num_heads = 8
-        self.linear = nn.Linear(in_feats, self.num_heads * hid_feats, bias=bias)
-        # self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
-        # self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
-        self.fc = nn.Linear(self.num_heads * hid_feats, out_feats, bias=bias)
-        self.al = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
-        self.ar = nn.Parameter(torch.Tensor(size=(self.num_heads, hid_feats, 1)))
+        self.linear = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.linear1 = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.linear2 = nn.Linear(in_feats, hid_feats, bias=bias)
+        self.fc = nn.Linear(hid_feats, out_feats, bias=bias)
+        self.al = nn.Linear(hid_feats, 1)
+        self.ar = nn.Linear(hid_feats, 1)
         self.activation = activation
         nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
-        # nn.init.xavier_uniform_(self.linear1.weight, gain=nn.init.calculate_gain('relu'))
-        # nn.init.xavier_uniform_(self.linear2.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.linear1.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.xavier_uniform_(self.linear2.weight, gain=nn.init.calculate_gain('relu'))
         nn.init.xavier_uniform_(self.fc.weight, gain=nn.init.calculate_gain('relu'))
-        nn.init.xavier_normal_(self.al.data, gain=1.414)
-        nn.init.xavier_normal_(self.ar.data, gain=1.414)
-        # nn.init.xavier_normal_(self.fc.weight.data, gain=1.414)
-        # nn.init.xavier_normal_(self.linear.weight.data, gain=1.414)
+        nn.init.xavier_normal_(self.al.weight, gain=1.414)
+        nn.init.xavier_normal_(self.ar.weight, gain=1.414)
         self.leaky_relu = nn.LeakyReLU(0.2)
-        self.reset_parameters(self.linear)
-        # self.reset_parameters(self.fc)
+        # self.reset_parameters()
 
-
-    def reset_parameters(self, model):
-        stdv = 1. / math.sqrt(model.weight.size(1))
-        model.weight.data.uniform_(-stdv, stdv)
-        if model.bias is not None:
-            bias_stdv = 1. / math.sqrt(model.bias.size(0))
-            model.bias.data.uniform_(-bias_stdv, bias_stdv)
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.weight.size(1))
+        self.weight.data.uniform_(-stdv, stdv)
+        if self.bias is not None:
+            bias_stdv = 1. / math.sqrt(self.bias.size(0))
+            self.bias.data.uniform_(-bias_stdv, bias_stdv)
 
     def forward(self, h):
         h = self.dropout(h)
@@ -86,44 +121,40 @@ class GCNLayer(nn.Module):
         self.g2.ndata['h'] = h
         self.g1.update_all(gcn_msg, gcn_reduce)
         self.g2.update_all(gcn_msg, gcn_reduce)
-        h1 = self.g1.ndata.pop('h')  # (H,N,D)
+        h1 = self.g1.ndata.pop('h')
         h2 = self.g2.ndata.pop('h')
-        h1 = h1.reshape((self.num_heads, h1.shape[0], -1))
-        h2 = h2.reshape((self.num_heads, h2.shape[0], -1))
-        h = h.reshape((self.num_heads, h.shape[0], -1))
-        # print('h.shape=', h1.shape, 'al.shape=', self.al.shape, 'self.num_heads=', self.num_heads)
-        ai = torch.bmm(h, self.al)  # (H,N,1)
-        aj1 = torch.bmm(h1, self.ar)
-        aj2 = torch.bmm(h2, self.ar)
+        ai = self.al(h)
+        aj1 = self.ar(h1)
+        aj2 = self.ar(h2)
         a1 = self.leaky_relu(ai + aj1)
         a1 = torch.exp(a1).clamp(-10, 10)
         a2 = self.leaky_relu(ai + aj2)
         a2 = torch.exp(a2).clamp(-10, 10)
-        alpha1 = a1 / (a1 + a2)  # (H,N,1)
-        alpha2 = a2 / (a1 + a2)  # (H,N,1)
-        h = alpha1 * h1 + alpha2 * h2  # (H,N,D)
-        h = h.reshape((h.shape[1], -1))
-        # h = torch.sum(h, dim=0) / self.num_heads
-        # print('h2.shape=', h.shape)  # (N, 1)
+        alpha1 = a1/(a1+a2)
+        alpha2 = a2/(a1+a2)
+        h = alpha1*h1+alpha2*h2
+
         h = self.fc(h)
         return h
 
-    def forward1(self, h):
-        h1 = self.dropout(h)
-        h2 = self.dropout(h)
-        # self_h = h
-        self.g1.ndata['h'] = self.linear1(h1)
-        self.g2.ndata['h'] = self.linear2(h2)
-        self.g1.update_all(gcn_msg, gcn_reduce)
-        self.g2.update_all(gcn_msg, gcn_reduce)
-        h1 = self.g1.ndata.pop('h')
-        h1 = self.activation(h1)
-        h2 = self.g2.ndata.pop('h')
-        h2 = self.activation(h2)
-        h = torch.cat((h1, h2), dim=1)
-        h = self.dropout(h)
-        h = self.fc(h)
-        return h
+
+
+    # def forward1(self, h):
+    #     h1 = self.dropout(h)
+    #     h2 = self.dropout(h)
+    #     # self_h = h
+    #     self.g1.ndata['h'] = self.linear1(h1)
+    #     self.g2.ndata['h'] = self.linear2(h2)
+    #     self.g1.update_all(gcn_msg, gcn_reduce)
+    #     self.g2.update_all(gcn_msg, gcn_reduce)
+    #     h1 = self.g1.ndata.pop('h')
+    #     h1 = self.activation(h1)
+    #     h2 = self.g2.ndata.pop('h')
+    #     h2 = self.activation(h2)
+    #     h = torch.cat((h1, h2), dim=1)
+    #     h = self.dropout(h)
+    #     h = self.fc(h)
+    #     return h
 
 
 class GCN(nn.Module):
@@ -227,7 +258,7 @@ def main(args):
 
     for key in edge_dict2.keys():
         edge_dict2[key].difference_update(edge_dict1[key])
-        edge_dict2[key].add(key)
+        # edge_dict2[key].add(key)
     # print(len(edge_dict2[1344]), edge_dict2[1344])
 
     g2 = DGLGraph(data.graph)

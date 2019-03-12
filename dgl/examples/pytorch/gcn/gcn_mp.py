@@ -79,6 +79,7 @@ class GCNLayer(nn.Module):
         h = self.g.ndata.pop('h')
         return h
 
+
 class GCN(nn.Module):
     def __init__(self,
                  g,

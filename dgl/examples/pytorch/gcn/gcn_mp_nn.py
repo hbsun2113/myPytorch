@@ -69,17 +69,19 @@ class GCNLayer(nn.Module):
         else:
             self.bias = None
         self.activation = activation
-        nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
-        # self.reset_parameters()
+        # nn.init.xavier_uniform_(self.linear.weight, gain=nn.init.calculate_gain('relu'))
+        self.reset_parameters()
 
     def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.weight.size(1))
-        self.weight.data.uniform_(-stdv, stdv)
-        if self.bias is not None:
-            bias_stdv = 1. / math.sqrt(self.bias.size(0))
-            self.bias.data.uniform_(-bias_stdv, bias_stdv)
+        print(self.linear.weight.size(), self.linear.bias.size())
+        stdv = 1. / math.sqrt(self.linear.weight.size(1))
+        self.linear.weight.data.uniform_(-stdv, stdv)
+        if self.linear.bias is not None:
+            bias_stdv = 1. / math.sqrt(self.linear.bias.size(0))
+            self.linear.bias.data.uniform_(-bias_stdv, bias_stdv)
 
-    def reset_parameters(self):
+    def reset_parameters1(self):
+        print('go into rest1')
         stdv = 1. / math.sqrt(self.weight.size(1))
         self.weight.data.uniform_(-stdv, stdv)
         if self.bias is not None:
@@ -250,7 +252,7 @@ if __name__ == '__main__':
             help="number of training epochs")
     parser.add_argument("--n-hidden", type=int, default=16,
             help="number of hidden gcn units")
-    parser.add_argument("--n-layers", type=int, default=1,
+    parser.add_argument("--n-layers", type=int, default=2,
             help="number of hidden gcn layers")
     parser.add_argument("--weight-decay", type=float, default=5e-4,
             help="Weight for L2 loss")
